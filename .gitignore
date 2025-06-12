@@ -1,5 +1,5 @@
 images
-segmented_results
+segmented_images
 capdec
 capdec_model
 yolov8s-seg.pt

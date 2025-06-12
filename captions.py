@@ -1,76 +1,110 @@
-import os
-from PIL import Image
-import pandas as pd
 import torch
+import cv2
+import numpy as np
+import os
+import csv
+from PIL import Image
+import easyocr
+import spacy
 from ultralytics import YOLO
-from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
-# Set device
+# Device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load models
-yolo_model = YOLO("yolov8s-seg.pt")  # Use the segmentation model
-caption_model_name = "nlpconnect/vit-gpt2-image-captioning"
-caption_model = VisionEncoderDecoderModel.from_pretrained(caption_model_name).to(device)
-caption_processor = ViTImageProcessor.from_pretrained(caption_model_name)
-caption_tokenizer = AutoTokenizer.from_pretrained(caption_model_name)
+yolo_model = YOLO("yolov8s-seg.pt")
+blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
+ocr_reader = easyocr.Reader(['en', 'hu'], gpu=torch.cuda.is_available())
+nlp = spacy.load("en_core_web_sm")
 
-def extract_objects(image: Image.Image):
-    """ Extracts segmented objects using YOLOv8 segmentation. """
-    results = yolo_model(image, task="segment", conf=0.25)  # Lower confidence threshold
-    object_names = []
+# Utility Functions
+def apply_mask(image: Image.Image, mask: np.ndarray):
+    np_image = np.array(image)
+    np_image[mask == 0] = 0
+    return Image.fromarray(np_image)
+
+def extract_segments(image: Image.Image):
+    results = yolo_model(image, task="segment", conf=0.5)
+    segments = []
     if results[0].masks is not None:
-        for box in results[0].boxes:
-            object_names.append(results[0].names[int(box.cls)])
-    return list(set(object_names)), results
+        masks = results[0].masks.data.cpu().numpy()
+        for idx, box in enumerate(results[0].boxes):
+            obj_name = results[0].names[int(box.cls)]
+            mask = masks[idx]
+            segmented_region = apply_mask(image, mask)
+            segments.append({"object": obj_name, "cropped": segmented_region})
+    return segments
 
-def generate_caption(image: Image.Image, detected_objects: list) -> str:
-    """ Generates an enriched caption incorporating detected objects. """
-    pixel_values = caption_processor(images=image, return_tensors="pt").pixel_values.to(device)
-    output_ids = caption_model.generate(pixel_values, max_length=40)
-    base_caption = caption_tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
-    obj_text = f" Detected objects: {', '.join(detected_objects)}." if detected_objects else ""
-    return base_caption + obj_text
+def generate_caption(image: Image.Image):
+    inputs = blip_processor(image, return_tensors="pt").to(device)
+    outputs = blip_model.generate(**inputs, max_length=50)
+    caption = blip_processor.decode(outputs[0], skip_special_tokens=True)
+    return caption
 
-def save_segmented_result_image(results, image_path):
-    """ Saves an image with segmentation masks drawn over it. """
-    seg_img_array = results[0].plot()  # YOLO's plot() method returns a numpy array
-    seg_image = Image.fromarray(seg_img_array)
-    
-    seg_folder = "segmented_results"
-    os.makedirs(seg_folder, exist_ok=True)
-    seg_img_path = os.path.join(seg_folder, f"seg_{os.path.basename(image_path)}")
-    seg_image.save(seg_img_path)
-    print(f"[✓] Saved segmented image at {seg_img_path}")
+def extract_text(image_path):
+    img = cv2.imread(image_path)
+    results = ocr_reader.readtext(img)
+    detected_texts = [res[1] for res in results]
+    return ", ".join(detected_texts) if detected_texts else "No text detected"
 
+def semantic_consistency_check(caption: str, detected_class: str) -> str:
+    return "yes" if detected_class.lower() in caption.lower() else "no"
+
+def multilabel_mislabel_check(caption: str, class_name: str) -> str:
+    doc = nlp(caption.lower())
+    nouns = [token.text for token in doc if token.pos_ == "NOUN"]
+    return "mismatch" if class_name.lower() not in nouns else "ok"
+
+# Main
 def caption_images_from_folder(root_folder: str, output_csv: str = "captions.csv"):
-    """ Processes images from a folder and saves segmentation overlay images. """
-    # Get subfolders (use the first subfolder for processing)
     subfolders = [f.path for f in os.scandir(root_folder) if f.is_dir()]
     if not subfolders:
         print("No subfolders found.")
         return
+    first_subfolder = subfolders[0]
+    image_files = [f for f in os.listdir(first_subfolder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    if not image_files:
+        print("No images found.")
+        return
 
-    image_files = [f for f in os.listdir(subfolders[0]) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    captions = []
+    rows = [["image_path", "object_class", "caption", "text_detected",
+             "semantic_consistent", "multilabel_check"]]
 
-    for img_file in image_files:
-        img_path = os.path.join(subfolders[0], img_file)
+    for idx, filename in enumerate(image_files, 1):
+        print(f"\n\n[{idx}/{len(image_files)}] Processing image: {filename}")
+        image_path = os.path.join(first_subfolder, filename)
         try:
-            # Open and resize image for YOLO
-            image = Image.open(img_path).convert("RGB").resize((640, 480))
-            objects, results = extract_objects(image)
-            caption = generate_caption(image, objects)
-            captions.append({"image": img_file, "caption": caption})
-            print(f"[✓] {img_file}: {caption}")
-            
-            # Save the segmentation overlay image to check segmentation quality
-            save_segmented_result_image(results, img_path)
+            image = Image.open(image_path).convert("RGB").resize((640, 480))
         except Exception as e:
-            print(f"[✗] Failed on {img_file}: {e}")
+            print(f"Failed to open {image_path}: {e}")
+            continue
 
-    pd.DataFrame(captions).to_csv(output_csv, index=False)
-    print(f"\nSaved {len(captions)} captions to {output_csv}")
+        image_caption = generate_caption(image)
+        detected_text = extract_text(image_path)
+        segments = extract_segments(image)
+
+        rows.append([
+            image_path, "full_image", image_caption, detected_text,
+            "N/A", "N/A"
+        ])
+
+        for idx, segment in enumerate(segments):
+            caption = generate_caption(segment["cropped"])
+            obj_class = segment["object"]
+            semantic_ok = semantic_consistency_check(caption, obj_class)
+            multilabel_check = multilabel_mislabel_check(caption, obj_class)
+
+            rows.append([
+                image_path, obj_class, caption, detected_text,
+                semantic_ok, multilabel_check
+            ])
+
+    with open(output_csv, mode="w", newline='', encoding='utf-8') as f:
+        csv.writer(f).writerows(rows)
+
+    print(f"\nFinished! Results saved to {output_csv}")
 
 if __name__ == "__main__":
     caption_images_from_folder("images")
