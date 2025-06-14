@@ -4,6 +4,7 @@ capdec
 capdec_model
 yolov8s-seg.pt
 previous
-captions.csv
+captions*.csv
 .env
 generated_reports
+evaluation*.csv

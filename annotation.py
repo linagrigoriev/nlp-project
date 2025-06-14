@@ -7,23 +7,26 @@ from collections import defaultdict
 
 # Load environment variables
 load_dotenv()
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_BASE_URL")
-MODEL = os.getenv("OPENAI_MODEL")
+API_KEY = os.getenv("OPENAI_API_KEY_R")
+BASE_URL = os.getenv("OPENAI_BASE_URL_R")
+MODEL = os.getenv("OPENAI_MODEL_R")
 
 # Initialize client
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 # Read the captions CSV
-df = pd.read_csv("captions.csv")
+df = pd.read_csv("captions_finetuned.csv")
 
 # Group captions by folder (e.g., images\157515_v2)
 folder_groups = defaultdict(list)
 
+# Group captions and text_detected by folder
 for _, row in df.iterrows():
     folder = Path(row['image_path']).parts[1]  # e.g., 157515_v2
     caption = row['caption']
-    folder_groups[folder].append(caption)
+    text = row.get('text_detected', '')  # fallback to empty if column missing
+    combined = f"{caption} [Detected Text: {text}]" if pd.notna(text) and text.strip() else caption
+    folder_groups[folder].append(combined)
 
 # Helper: construct prompt for a folder
 def build_prompt(folder_name, captions):
@@ -55,7 +58,6 @@ def build_prompt(folder_name, captions):
 ### Inspection Methods
 ### Condition Assessment
 ### Valuation Principles
-### Determined Values
 ### Documentation & Accessories
 
 Captions (from images):
