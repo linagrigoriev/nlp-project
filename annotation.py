@@ -4,6 +4,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 from collections import defaultdict
+import re
 
 # Load environment variables
 load_dotenv()
@@ -14,24 +15,20 @@ MODEL = os.getenv("OPENAI_MODEL_R")
 # Initialize client
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-# Read the captions CSV
-df = pd.read_csv("captions_finetuned.csv")
+# Output directory
+output_dir = Path("generated_reports_full_image")
+output_dir.mkdir(exist_ok=True)
 
-# Group captions by folder (e.g., images\157515_v2)
-folder_groups = defaultdict(list)
+# Directory where script is located
+script_dir = Path(__file__).resolve().parent
 
-# Group captions and text_detected by folder
-for _, row in df.iterrows():
-    folder = Path(row['image_path']).parts[1]  # e.g., 157515_v2
-    caption = row['caption']
-    text = row.get('text_detected', '')  # fallback to empty if column missing
-    combined = f"{caption} [Detected Text: {text}]" if pd.notna(text) and text.strip() else caption
-    folder_groups[folder].append(combined)
+# Find all evaluation CSV files matching the pattern
+csv_files = list(script_dir.glob("evaluation_*.csv"))
 
 # Helper: construct prompt for a folder
 def build_prompt(folder_name, captions):
     prompt = f"""Given the following image captions for a vehicle stored in folder {folder_name}, generate a structured markdown report with these required sections:
-    
+
 ## {folder_name}
 
 ### Identification & General Data
@@ -67,14 +64,33 @@ Write the markdown in the above format. Use domain knowledge to fill in missing 
 """
     return prompt.strip()
 
-# Output directory
-output_dir = Path("generated_reports")
-output_dir.mkdir(exist_ok=True)
+# Process each CSV
+for csv_file in csv_files:
+    folder_name_match = re.match(r"evaluation_(.+)\.csv", csv_file.name)
+    if not folder_name_match:
+        continue  # skip if filename doesn't match
 
-# Process each folder
-for folder, captions in folder_groups.items():
-    prompt = build_prompt(folder, captions)
-    
+    folder_name = folder_name_match.group(1)
+
+    df = pd.read_csv(csv_file)
+    captions = []
+
+    for _, row in df.iterrows():
+        if row.get('object_class') != 'full_image':
+            continue  # Skip non-full_image entries
+
+        caption = row.get('caption', '')
+        text = row.get('text_detected', '')
+        combined = f"{caption} [Detected Text: {text}]" if pd.notna(text) and str(text).strip() else caption
+        if combined.strip():
+            captions.append(combined)
+
+    if not captions:
+        print(f"⚠️ No captions found in {csv_file.name}. Skipping.")
+        continue
+
+    prompt = build_prompt(folder_name, captions)
+
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
@@ -85,8 +101,8 @@ for folder, captions in folder_groups.items():
 
     report = response.choices[0].message.content
 
-    with open(output_dir / f"{folder}.md", "w", encoding="utf-8") as f:
+    output_path = output_dir / f"{folder_name}.md"
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"✅ Generated: {folder}.md")
-
+    print(f"✅ Generated: {output_path.name}")

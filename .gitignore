@@ -6,5 +6,5 @@ yolov8s-seg.pt
 previous
 captions*.csv
 .env
-generated_reports
+generated_reports*
 evaluation*.csv

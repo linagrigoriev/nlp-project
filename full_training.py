@@ -9,8 +9,6 @@ import easyocr
 import spacy
 from ultralytics import YOLO
 from transformers import BlipProcessor, BlipForConditionalGeneration, get_linear_schedule_with_warmup, pipeline
-
-# For API calls and environment variables
 import pandas as pd
 from collections import defaultdict
 from openai import OpenAI
@@ -18,23 +16,10 @@ from dotenv import load_dotenv
 from pathlib import Path
 import re
 import time
-from difflib import SequenceMatcher
 import json
-
-SIMILARITY_LOSS_WEIGHT = 2.0  
 
 # ------------------ Model & Utility Loading ------------------ #
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def caption_similarity_penalty(new_caption: str, previous_captions: list, threshold: float = 0.6) -> float:
-    for prev in previous_captions:
-        ratio = SequenceMatcher(None, new_caption.lower(), prev.lower()).ratio()
-        # print(f"    ↪ Similarity to \"{prev[:60]}...\": {ratio:.4f}")  # Debug line
-        if ratio > threshold:
-            penalty = ratio
-            # print(f"    ↪ Applying penalty: {penalty:.4f} (ratio: {ratio:.4f})")
-            return penalty
-    return 0.0
 
 # Vision/AI Models
 yolo_model = YOLO("yolov8s-seg.pt")
@@ -47,9 +32,6 @@ finetuned_path = os.path.join("images", "blip_finetuned.pt")
 # Ground truth captions path
 captions_path = os.path.join("images", "ground_truth_captions.json")
 captions_path_val = os.path.join("images", "ground_truth_captions_val.json")
-
-# Summarizer
-# summarizer = pipeline("summarization", model="facebook/bart-large-cnn", device=0 if torch.cuda.is_available() else -1)
 
 # Conditional load
 if os.path.exists(finetuned_path):
@@ -171,64 +153,6 @@ def remove_determined_values(text: str) -> str:
 
     return " ".join(cleaned_lines)
 
-# ------------------ API Prompt & Comparison Functions ------------------ #
-def build_prompt(folder_name, captions):
-    nl = "\n"  # Define the newline string outside the f-string
-    prompt = f"""Given the following image captions for a vehicle stored in folder {folder_name}, generate a structured markdown report with these required sections:
-    
-## {folder_name}
-
-### Identification & General Data
-- Asset Type
-- Manufacturer
-- Model
-- Vehicle Type
-- Year of Manufacture
-- First Registration Date
-- First Registration Country
-- Engine Power
-- Engine Displacement
-- Environmental Classification
-- Seating Capacity
-- Transmission Type
-- Technical Inspection Valid Until
-- Odometer Reading
-- Accepted Mileage
-- Number of Keys
-- Service Book
-- Usage
-- Document Date
-
-### Inspection Methods
-### Condition Assessment
-### Valuation Principles
-### Documentation & Accessories
-
-Captions (from images):
-{nl.join(f"- {cap}" for cap in captions)}
-
-Use domain knowledge to fill in missing details where possible; indicate where information is inferred or missing.
-"""
-    return prompt.strip()
-
-def generate_report(folder_name, captions):
-    prompt = build_prompt(folder_name, captions)
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": "You are a professional vehicle evaluator. Return structured markdown reports in the specified format."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    report = response.choices[0].message.content
-    return report
-
-def compare_reports(generated: str, original: str) -> str:
-    gen_lines = generated.splitlines(keepends=True)
-    orig_lines = original.splitlines(keepends=True)
-    diff = difflib.unified_diff(orig_lines, gen_lines, fromfile='Original', tofile='Generated', lineterm="")
-    return "\n".join(diff)
-
 # ------------------ OpenAI API Client Setup ------------------ #
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY_R")
@@ -336,11 +260,11 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
     test_folders = [] 
     for folder in os.listdir(root_folder):
         folder_path = os.path.join(root_folder, folder)
-        if os.path.isdir(folder_path) and folder in folder_ids:
-            available_folders.append(folder_path)
-        else:
-            # Not in folder_ids — add to test_folders
-            test_folders.append(folder_path)
+        if os.path.isdir(folder_path):
+            if folder in folder_ids:
+                available_folders.append(folder_path)
+            else:
+                test_folders.append(folder_path)
 
     available_folders.sort()
 
@@ -358,7 +282,7 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
     print("  Test folder:", [os.path.basename(f) for f in test_folders])
 
     # Setup optimizer and scheduler to fine-tune BLIP (we update only the captioning model)
-    num_epochs = 2
+    num_epochs = 3
     optimizer = torch.optim.Adam(blip_model.parameters(), lr=1e-6)
     # Count total number of training steps (rough estimate)
     total_steps = sum([len(os.listdir(f)) for f in training_folders if os.listdir(f)]) * num_epochs
@@ -390,94 +314,83 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
         # Shuffle training samples
         np.random.shuffle(training_samples)
         # Train on each image independently
-        # for image_index, (image_path, folder_name, target_caption) in enumerate(training_samples, start=1):
-        #     print(f"\n  Training image {image_index}/{len(training_samples)} from folder: {folder_name} - {os.path.basename(image_path)}")
-        #     try:
-        #         image = Image.open(image_path).convert("RGB").resize((640, 480))
-        #     except Exception as e:
-        #         print(f"Failed to open {image_path}: {e}")
-        #         continue
+        for image_index, (image_path, folder_name, target_caption) in enumerate(training_samples, start=1):
+            print(f"\n  Training image {image_index}/{len(training_samples)} from folder: {folder_name} - {os.path.basename(image_path)}")
+            try:
+                image = Image.open(image_path).convert("RGB").resize((640, 480))
+            except Exception as e:
+                print(f"Failed to open {image_path}: {e}")
+                continue
 
-        #     # Step 1: Generate caption
-        #     blip_model.eval()
-        #     with torch.no_grad():
-        #         inference_inputs = blip_processor(images=image, return_tensors="pt").to(device)
-        #         generated_ids = blip_model.generate(**inference_inputs)
-        #         predicted_caption = blip_processor.decode(generated_ids[0], skip_special_tokens=True)
-        #     blip_model.train()
+            # Step 1: Generate caption
+            blip_model.eval()
+            with torch.no_grad():
+                inference_inputs = blip_processor(images=image, return_tensors="pt").to(device)
+                generated_ids = blip_model.generate(**inference_inputs)
+                predicted_caption = blip_processor.decode(generated_ids[0], skip_special_tokens=True)
+            blip_model.train()
 
-        #     print(f"    Generated caption: {predicted_caption}")
+            print(f"    Generated caption: {predicted_caption}")
 
-        #     # Step 2: Refine with OpenAI
-        #     if image_path in refined_captions:
-        #         refined_caption = refined_captions[image_path]
-        #         print(f"    Using cached refined caption: {refined_caption}")
-        #     else:
-        #         try:
-        #             start_time = time.time()
-        #             refined_caption = refine_caption(predicted_caption, target_caption)
-        #             print(f"    Refined caption (in {time.time() - start_time:.2f}s): {refined_caption}")
+            # Step 2: Refine with OpenAI
+            if image_path in refined_captions:
+                refined_caption = refined_captions[image_path]
+                print(f"    Using cached refined caption: {refined_caption}")
+            else:
+                try:
+                    start_time = time.time()
+                    refined_caption = refine_caption(predicted_caption, target_caption)
+                    print(f"    Refined caption (in {time.time() - start_time:.2f}s): {refined_caption}")
 
-        #         except Exception as e:
-        #             print(f"Refinement error: {e}")
-        #             refined_caption = predicted_caption
+                except Exception as e:
+                    print(f"Refinement error: {e}")
+                    refined_caption = predicted_caption
 
-        #     # === Step 3: Use the refined caption for training ===
-        #     inputs = blip_processor(
-        #         images=image,
-        #         text=refined_caption,
-        #         return_tensors="pt",
-        #         truncation=True,
-        #         max_length=512
-        #     )
-        #     inputs = {k: v.to(device) for k, v in inputs.items()}
-        #     labels = inputs["input_ids"].clone()
-        #     labels[labels == blip_processor.tokenizer.pad_token_id] = -100
+            # === Step 3: Use the refined caption for training ===
+            inputs = blip_processor(
+                images=image,
+                text=refined_caption,
+                return_tensors="pt",
+                truncation=True,
+                max_length=512
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            labels = inputs["input_ids"].clone()
+            labels[labels == blip_processor.tokenizer.pad_token_id] = -100
 
-        #     outputs = blip_model(**inputs, labels=labels)
-        #     loss = outputs.loss
+            outputs = blip_model(**inputs, labels=labels)
+            loss = outputs.loss
 
-        #     # Apply caption repetition penalty
-        #     # similarity_penalty = caption_similarity_penalty(
-        #     #     refined_caption,
-        #     #     [cap for key, cap in refined_captions.items() if key.startswith(f"{folder_name}/")]
-        #     # )
-        #     # scaled_penalty = SIMILARITY_LOSS_WEIGHT * similarity_penalty
-        #     total_loss = loss
+            total_loss = loss
 
-        #     # print(f"    Cross-entropy loss: {loss.item():.4f}")
-        #     # print(f"    Regularization penalty: {scaled_penalty:.4f} (raw: {similarity_penalty:.4f} × weight {SIMILARITY_LOSS_WEIGHT})")
-        #     # print(f"    Total loss: {total_loss.item():.4f}")
+            # Backprop and step
+            total_loss.backward()
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
+            total_train_loss += loss.item()
+            train_image_count += 1
 
-        #     # Backprop and step
-        #     total_loss.backward()
-        #     optimizer.step()
-        #     scheduler.step()
-        #     optimizer.zero_grad()
-
-        #     total_train_loss += loss.item()
-        #     train_image_count += 1
-
-        #     refined_captions[image_path] = refined_caption
+            refined_captions[image_path] = refined_caption
 
 
-        #     # === Step 4: Log all results ===
-        #     all_rows.append([
-        #         image_path,
-        #         folder_name,
-        #         target_caption,
-        #         predicted_caption,
-        #         refined_caption
-        #     ])
+            # === Step 4: Log all results ===
+            all_rows.append([
+                image_path,
+                folder_name,
+                target_caption,
+                predicted_caption,
+                refined_caption
+            ])
 
-        # avg_train_loss = total_train_loss / train_image_count if train_image_count else 0.0
-        # print(f"Epoch {epoch} completed. Average training loss: {avg_train_loss:.4f}")
+        avg_train_loss = total_train_loss / train_image_count if train_image_count else 0.0
+        print(f"Epoch {epoch} completed. Average training loss: {avg_train_loss:.4f}")
 
-        # # Optionally, save the fine-tuned model checkpoint.
-        # model_save_path = os.path.join(root_folder, "blip_finetuned.pt")
-        # torch.save(blip_model.state_dict(), model_save_path)
-        # print(f"Fine-tuned BLIP model saved to {model_save_path}.")
+        # Save the fine-tuned model checkpoint.
+        model_save_path = os.path.join(root_folder, "blip_finetuned.pt")
+        torch.save(blip_model.state_dict(), model_save_path)
+        print(f"Fine-tuned BLIP model saved to {model_save_path}.")
 
         # ---- Validation Step (evaluate on the reserved validation folder) ---- #
         blip_model.eval()
@@ -507,7 +420,6 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
                 generated_ids = blip_model.generate(**inference_inputs)
                 predicted_caption = blip_processor.decode(generated_ids[0], skip_special_tokens=True)
 
-            # === Step 2: Refine caption using OpenAI + annotations ===
             print(f"    Generated caption: {predicted_caption}")
 
             # Step 2: Refine with OpenAI
@@ -550,13 +462,7 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
         avg_val_loss = val_loss / val_image_count if val_image_count else 0.0
         print(f"Validation loss: {avg_val_loss:.4f}")
 
-        # Optionally print samples
-        # for idx, (img_path, cap, ref_cap) in enumerate(validation_captions[:3], 1):
-        #     print(f"Validation sample {idx}: {img_path}")
-        #     print(f"Generated: {cap}")
-        #     print(f"Refined:   {ref_cap}\n")
-
-                # Save refined captions after epoch 1
+        # Save refined captions after epoch 1
         if epoch == 1:
             if not os.path.exists(captions_path):
                 try:
@@ -574,11 +480,11 @@ def training_loop(root_folder: str = "images", output_csv: str = "captions_blip.
                     print(f"Failed to save refined validation captions: {e}")
 
     # ---- Final Test Evaluation on the Test Folders ---- #
+    
     # Loop through all test folders
-    for test_folder in test_folders:
+    for test_folder in [validation_folder]:
         print(f"\n--- Final Evaluation on Test Folder: {os.path.basename(test_folder)} ---")
         test_folder_name = os.path.basename(test_folder)
-        target_caption_test = original_annotations.get(test_folder_name, "No Target")
 
         image_files = [f for f in os.listdir(test_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         total_test_images = len(image_files)
