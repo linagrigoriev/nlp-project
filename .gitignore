@@ -6,5 +6,12 @@ yolov8s-seg.pt
 previous
 captions*.csv
 .env
-generated_reports*
+generated_reports_*
 evaluation*.csv
+output*
+try.py
+__pycache__
+sam_vit_l_0b3195.pth
+# annotation.py
+# segmener_captioner.py
+# full_training.py
