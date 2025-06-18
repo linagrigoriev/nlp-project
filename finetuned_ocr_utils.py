@@ -1,5 +1,5 @@
 import cv2
-from model_loader import ocr_reader
+from finetuned_model_loader import ocr_reader
 
 def extract_text(image_path):
     img = cv2.imread(image_path)

@@ -14,7 +14,7 @@ MODEL = os.getenv("OPENAI_MODEL_R")
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 # Paths
-IMAGES_DIR = "images"
+IMAGES_DIR = "images" 
 MARKDOWN_FILE = "images/annotations.md" 
 OUTPUT_DIR = "output/captions"
 
@@ -84,6 +84,7 @@ def generate_caption_and_text(image_path):
 
 # Helper: Parse training folder names from markdown headers
 def get_train_folders_from_md(md_file):
+    # Only extract test folders to have final output to compare to required output
     train_folders = set()
     with open(md_file, "r", encoding="utf-8") as f:
         for line in f:

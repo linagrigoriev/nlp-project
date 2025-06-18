@@ -1,5 +1,5 @@
 import re
-from openai_client import client
+from finetuned_openai_client import client
 from config import MODEL
 
 def clean_duplicate_phrases(text: str) -> str:

@@ -1,9 +1,9 @@
-from model_loader import blip_model, blip_processor, device
+from finetuned_model_loader import blip_model, blip_processor, device
 from config import *
-from annotation_parser import parse_annotations, remove_determined_values
-from caption_refiner import refine_caption
-from image_utils import extract_combined_mask, run_sam_full_image
-from ocr_utils import extract_text
+from finetuned_annotation_parser import parse_annotations, remove_determined_values
+from finetuned_caption_refiner import refine_caption
+from finetuned_image_utils import extract_combined_mask, run_sam_full_image
+from finetuned_ocr_utils import extract_text
 from PIL import Image
 import torch
 import os
@@ -11,6 +11,7 @@ import json
 import numpy as np
 from transformers import get_linear_schedule_with_warmup
 import time
+import csv
 
 # Extract paths from config and define device
 captions_path = CAPTIONS_PATH
@@ -362,3 +363,10 @@ def training_loop(root_folder: str = "images"):
             ])
 
         print(f"Processed {len(image_files)} test images.")
+
+        # ---- Save Final CSV Output for this folder ---- #
+        output_csv = f"evaluation_{test_folder_name}.csv"
+        with open(output_csv, mode="w", newline='', encoding='utf-8') as f:
+            csv.writer(f).writerows(rows)
+
+        print(f"\nFinished! Results saved to {output_csv}")

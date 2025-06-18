@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
-from model_loader import yolo_model
-from model_loader import sam_predictor
+from finetuned_model_loader import yolo_model
+from finetuned_model_loader import sam_predictor
 import cv2
 
 def apply_mask(image: Image.Image, mask: np.ndarray):
@@ -20,14 +20,8 @@ def extract_segments(image: Image.Image):
             segmented_region = apply_mask(image, mask)
             segments.append({"object": obj_name, "cropped": segmented_region})
     return segments
-
-# def generate_caption(image: Image.Image):
-#     inputs = blip_processor(image, return_tensors="pt").to(DEVICE)
-#     outputs = blip_model.generate(**inputs, max_length=50)
-#     caption = blip_processor.decode(outputs[0], skip_special_tokens=True)
-#     return caption
     
-# Gulji's functions
+# Gulji's functions - still needs to be merged with blip-pipeline
 def mask_iou(mask1, mask2):
     intersection = np.logical_and(mask1, mask2).sum()
     union = np.logical_or(mask1, mask2).sum()
