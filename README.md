@@ -1,6 +1,6 @@
 # Multi-Domain Image Identification & Description
 
-The project consists of analazing images of one object (various types of transport and industrial equipment). Photos of both outside and inside parts were included, as well as documents. The end goal is to generate a structured markdown report, including the price estimation of the asset. 
+The project consists of analazing images of one object (various types of transport and industrial equipment). Photos of both outside and inside parts were included, as well as documents. The end goal is to generate a structured markdown report, including the price estimation of the asset.
 
 ## The logic is divided into 3 blocks:
 
@@ -25,16 +25,16 @@ There are multiple files that use different models for caption generation and te
 
 All the ones that are named finetuned\* employ BLIP + YOLOV8-SEG + SAM + EASYOCR.
 
-To start training, run `finetuned_main.py`. It works by calling training loop located in `finetuned_training.py`. 
+To start training, run `finetuned_main.py`. It works by calling training loop located in `finetuned_training.py`.
 
 First, it will download models defined in `finetuned_model_loader.py`. All of them are extracted from `Hugging Face`, except for `yolo_model` and `sam_checkpoint` (those need to downloaded separately and stored locally, see the file for which models are used).
 
-Then, it would look for `annotations.md` (assuming we're provided with a markdown file with examples of end annotations, stored in the same folder as images). Furthermore, it looks up for `refined_captions` stored locally, if not present, they will be generated further. 
+Then, it would look for `annotations.md` (assuming we're provided with a markdown file with examples of end annotations, stored in the same folder as images). Furthermore, it looks up for `refined_captions` stored locally, if not present, they will be generated further.
 
 #### Segmentation
 
 We generate segmentations (if not present) and store them locally. They are needed in order for the model to focus on the main area of interest and filter out background noise.
-Check `finetuned_image_utils.md` for coding logic (temporarly comments are not present due to need to merge with another branch). 
+Check `finetuned_image_utils.md` for coding logic (temporarly comments are not present due to need to merge with another branch).
 
 We didn't implement segmentation for training, only for testing, so our finetuned checkpoint version was only trained on full images.
 
@@ -56,7 +56,7 @@ After training, use the finetuned model to generate captions and `EasyOCR` for t
 
 ### 2. GPT-4 Turbo
 
-Since `GPT-4 Turbo` doesn't allow finetuning, the API calls are used to prompt the LLM to generate captions and extract text. Works better than `EasyOCR` for text recognition and generates better captions than finetuned `BLIP`. Run `openai_captioning.py` to test.
+Since `GPT-4 Turbo` doesn't allow finetuning, the API calls are used to prompt `GPT-4 Turbo` to generate captions and extract text. Works better than `EasyOCR` for text recognition and generates better captions than finetuned `BLIP`. Run `openai_captioning.py` to test.
 
 ## Description generation
 
